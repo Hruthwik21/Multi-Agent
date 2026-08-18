@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolyMind — Multi-AI Discussion Platform</title>
+  <meta name="description" content="Submit any query and watch multiple AI agents debate, analyze, and synthesize the best possible answer together." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════ HEADER ═══════════════════ -->
+  <header class="header" role="banner">
+    <div class="header-inner">
+      <div class="logo">
+        <div class="logo-icon" aria-hidden="true">
+          <span class="logo-dot dot-blue"></span>
+          <span class="logo-dot dot-red"></span>
+          <span class="logo-dot dot-green"></span>
+          <span class="logo-dot dot-purple"></span>
+        </div>
+        <span class="logo-text">PolyMind</span>
+        <span class="logo-badge">BETA</span>
+      </div>
+      <p class="header-tagline">Multi-AI Collaborative Intelligence</p>
+    </div>
+  </header>
+
+  <!-- ═══════════════════ MAIN ═══════════════════ -->
+  <main class="main" role="main">
+
+    <!-- ─── LEFT PANEL: Query Input ─── -->
+    <aside class="panel panel-left" aria-label="Query input panel">
+
+      <section class="query-section">
+        <h1 class="section-title">Ask PolyMind</h1>
+        <p class="section-subtitle">
+          Your query is discussed by four specialized AI agents — each bringing a unique perspective — then synthesized into the best possible answer.
+        </p>
+
+        <div class="query-form" id="queryForm">
+          <label for="queryInput" class="input-label">Your Query</label>
+          <textarea
+            id="queryInput"
+            class="query-input"
+            placeholder="e.g. What is the Monty Hall problem and what is the correct answer?
+or: Write a Python function to detect if a string is a palindrome
+or: What caused the fall of the Roman Empire?"
+            rows="6"
+            aria-label="Enter your query here"
+            maxlength="2000"
+          ></textarea>
+          <div class="input-footer">
+            <span id="charCount" class="char-count">0 / 2000</span>
+          </div>
+
+          <div class="rounds-row">
+            <label for="roundsSelect" class="rounds-label">Discussion rounds</label>
+            <select id="roundsSelect" class="rounds-select" aria-label="Number of discussion rounds">
+              <option value="1">1 round (faster)</option>
+              <option value="2" selected>2 rounds (recommended)</option>
+              <option value="3">3 rounds (deeper)</option>
+            </select>
+          </div>
+
+          <button id="submitBtn" class="submit-btn" type="button" onclick="startDiscussion()">
+            <span class="submit-btn-text">Start Discussion</span>
+            <span class="submit-btn-icon" aria-hidden="true">▶</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Agent Legend -->
+      <section class="legend-section" aria-label="Agent roles">
+        <h2 class="legend-title">The Panel</h2>
+        <div class="legend-grid">
+          <div class="legend-card legend-card--analyst">
+            <div class="legend-avatar" aria-hidden="true">🔍</div>
+            <div class="legend-info">
+              <strong>Analyst</strong>
+              <span>Breaks down the problem</span>
+            </div>
+          </div>
+          <div class="legend-card legend-card--critic">
+            <div class="legend-avatar" aria-hidden="true">⚡</div>
+            <div class="legend-info">
+              <strong>Critic</strong>
+              <span>Challenges assumptions</span>
+            </div>
+          </div>
+          <div class="legend-card legend-card--expert">
+            <div class="legend-avatar" aria-hidden="true">📚</div>
+            <div class="legend-info">
+              <strong>Expert</strong>
+              <strong>Expert</strong>
+              <span>Domain knowledge</span>
+            </div>
+          </div>
+          <div class="legend-card legend-card--synthesizer">
+            <div class="legend-avatar" aria-hidden="true">✨</div>
+            <div class="legend-info">
+              <strong>Synthesizer</strong>
+              <span>Final answer</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- ─── RIGHT PANEL: Discussion Thread ─── -->
+    <section class="panel panel-right" aria-label="Discussion thread">
+
+      <!-- Empty state -->
+      <div class="empty-state" id="emptyState" role="status">
+        <div class="empty-icon" aria-hidden="true">💬</div>
+        <h2 class="empty-title">Ready for Discussion</h2>
+        <p class="empty-desc">Submit a query on the left and watch the AI panel debate your question in real time.</p>
+      </div>
+
+      <!-- Progress bar -->
+      <div class="progress-bar-wrap" id="progressWrap" hidden aria-hidden="true">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+
+      <!-- Status label -->
+      <div class="status-label" id="statusLabel" hidden role="status" aria-live="polite"></div>
+
+      <!-- Discussion thread -->
+      <div class="thread" id="thread" role="log" aria-live="polite" aria-label="Discussion thread"></div>
+
+      <!-- Final answer section -->
+      <div class="final-answer-wrap" id="finalAnswerWrap" hidden>
+        <div class="final-answer-header">
+          <span class="final-answer-icon" aria-hidden="true">✨</span>
+          <h2 class="final-answer-title">Synthesized Answer</h2>
+        </div>
+        <div class="final-answer-body" id="finalAnswerBody"></div>
+        <button class="copy-btn" id="copyBtn" onclick="copyFinalAnswer()" aria-label="Copy final answer to clipboard">
+          📋 Copy Answer
+        </button>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- ═══════════════════ FOOTER ═══════════════════ -->
+  <footer class="footer" role="contentinfo">
+    <p>PolyMind — powered by <strong>Google Antigravity SDK</strong> &amp; Gemini · Built with ❤️ by Hruthwik21</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
