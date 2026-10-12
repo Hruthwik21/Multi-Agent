@@ -1,0 +1,24 @@
+## 🤖 PolyMind Code Review Council
+
+{{ intro }}
+
+| # | File:Line | Severity | Claim | Status | Evidence |
+|---|-----------|----------|-------|--------|----------|
+{% for c in claims -%}
+| {{ loop.index }} | `{{ c.file }}`{% if c.line %}:{{ c.line }}{% endif %} | **{{ c.severity.value }}** | {{ c.issue }} ({{ c.agent }}) | {{ badge(c) }}{% if c.verification_tool %} via `{{ c.verification_tool }}`{% endif %} | {{ c.evidence[:160] }} |
+{% endfor %}
+
+{% for c in claims -%}
+{% if c.suggested_fix %}
+<details><summary>Suggested fix for `{{ c.file }}`{% if c.line %}:{{ c.line }}{% endif %}</summary>
+
+```suggestion
+{{ c.suggested_fix[:800] }}
+```
+
+</details>
+{% endif %}
+{% endfor %}
+
+---
+<sub>Cost: ${{ "%.4f"|format(cost_usd) }} · Latency: {{ latency_ms }}ms · Only ✅ Verified findings should block merge; ⚠️ items need human judgment.</sub>

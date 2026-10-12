@@ -1,0 +1,40 @@
+[project]
+name = "polymind-v2"
+version = "2.0.0"
+description = "PolyMind v2 — Code Review Council: multi-agent PR review with verification"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.111",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "structlog>=24.1",
+  "tenacity>=8.3",
+  "httpx>=0.27",
+  "PyGithub>=2.4",
+  "Jinja2>=3.1",
+  "sse-starlette>=1.8",
+  "python-dotenv>=1.0",
+  "anyio>=4.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.4", "mypy>=1.10", "respx>=0.21"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

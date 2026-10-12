@@ -1,171 +1,171 @@
-"""
-PolyMind — FastAPI Backend
---------------------------
-Exposes:
-  POST /api/discuss  — Start a discussion session
-  GET  /api/stream/{session_id} — SSE stream of agent messages
-  GET  /health — Health check
-"""
-import asyncio
-import json
-import os
-import uuid
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from typing import AsyncIterator
+"""FastAPI app: POST /api/review, GET /api/stream/{id}, GET /api/report/{id}, GET /health."""
+from __future__ import annotations
 
-from dotenv import load_dotenv
+import asyncio
+import time
+import uuid
+from typing import Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
-from .discussion_engine import run_discussion
-from .models import AgentMessage, DiscussionRequest
+from backend.config import get_settings
+from backend.engine import ReviewEngine
+from backend.logging_setup import get_logger, setup_logging
+from backend.storage.sqlite import SQLiteStore
+from backend.synthesis.github_poster import post_comment
 
-# Load environment variables from .env file
-load_dotenv()
+settings = get_settings()
+setup_logging(settings.log_level)
+log = get_logger(component="api")
 
-# ── In-memory session store ─────────────────────────────────────────────────
-# Maps session_id -> asyncio.Queue of AgentMessage | None (None = done)
-sessions: dict[str, asyncio.Queue] = {}
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan: startup/shutdown logic."""
-    print("🚀 PolyMind backend starting...")
-    yield
-    print("🛑 PolyMind backend shutting down...")
-    sessions.clear()
-
-
-app = FastAPI(
-    title="PolyMind API",
-    description="Multi-AI agent discussion platform",
-    version="1.0.0",
-    lifespan=lifespan,
-)
-
-# Allow frontend (file:// or localhost) to call the API
+app = FastAPI(title="PolyMind v2 — Code Review Council", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origin_list + ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Serve the frontend from /
-frontend_path = os.path.join(os.path.dirname(__file__), "..", "frontend")
-if os.path.isdir(frontend_path):
-    app.mount("/static", StaticFiles(directory=frontend_path), name="static")
+store = SQLiteStore(settings.database_url)
+engine = ReviewEngine()
+_jobs: dict[str, dict] = {}
 
 
-# ── Routes ──────────────────────────────────────────────────────────────────
-
-@app.get("/")
-async def serve_frontend():
-    """Serve the main frontend HTML file."""
-    index_path = os.path.join(frontend_path, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"message": "PolyMind API is running. Frontend not found."}
+class ReviewRequest(BaseModel):
+    pr_url: str
+    diff: Optional[str] = None
+    post_to_github: bool = False
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {
-        "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "gemini_key_set": bool(os.getenv("GEMINI_API_KEY")),
-    }
+async def health():  # type: ignore[no-untyped-def]
+    s = get_settings()
+    return {"status": "ok", "llm": "live" if s.has_llm_key else "mock",
+            "model": s.gemini_model, "version": "2.0.0"}
 
 
-@app.post("/api/discuss")
-async def start_discussion(request: DiscussionRequest):
-    """
-    Start a new discussion session.
-    Returns a session_id to use with the SSE /api/stream endpoint.
-    """
-    if not request.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+@app.post("/api/review")
+async def start_review(req: ReviewRequest):  # type: ignore[no-untyped-def]
+    session_id = uuid.uuid4().hex[:8]
+    _jobs[session_id] = {"pr_url": req.pr_url, "diff": req.diff,
+                         "post": req.post_to_github, "events": [],
+                         "status": "pending", "result": None}
+    asyncio.create_task(_run_job(session_id))
+    return {"session_id": session_id, "stream_url": f"/api/stream/{session_id}"}
 
-    rounds = max(1, min(request.rounds, 5))  # clamp between 1 and 5
 
-    session_id = str(uuid.uuid4())
-    queue: asyncio.Queue = asyncio.Queue()
-    sessions[session_id] = queue
-
-    # Run the discussion in the background, pushing messages to the queue
-    async def run_and_enqueue():
-        try:
-            async for msg in run_discussion(request.query, rounds=rounds):
-                await queue.put(msg)
-        except Exception as e:
-            error_msg = AgentMessage(
-                agent="system",
-                agent_name="System",
-                content=f"Error: {str(e)}",
-                round=-99,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-            await queue.put(error_msg)
-        finally:
-            await queue.put(None)  # Signal completion
-
-    asyncio.create_task(run_and_enqueue())
-
-    return {
-        "session_id": session_id,
-        "query": request.query,
-        "rounds": rounds,
-        "stream_url": f"/api/stream/{session_id}",
-    }
+async def _run_job(session_id: str) -> None:
+    job = _jobs[session_id]
+    job["status"] = "running"
+    t0 = time.time()
+    try:
+        async for ev in engine.run(job["pr_url"], job["diff"]):
+            job["events"].append({"event": ev.event, "data": ev.data})
+            if ev.event == "done":
+                job["result"] = ev.data
+                if job["post"]:
+                    try:
+                        url = await post_comment(job["pr_url"], ev.data.get("comment", ""))
+                        job["result"]["posted_url"] = url
+                    except Exception as e:
+                        job["result"]["post_error"] = str(e)[:500]
+                await store.save_session({"id": session_id, "pr_url": job["pr_url"],
+                                          "claims": ev.data.get("claims", []),
+                                          "comment": ev.data.get("comment", "")})
+                await store.save_report(session_id, _report_html(
+                    session_id, job["pr_url"], ev.data.get("claims", []),
+                    ev.data.get("comment", "")))
+        job["status"] = "done"
+        job["latency_ms"] = int((time.time() - t0) * 1000)
+    except Exception as e:
+        log.error("job-failed", session_id=session_id, error=str(e)[:500])
+        job["status"] = "failed"
+        job["events"].append({"event": "error", "data": {"message": str(e)[:500]}})
 
 
 @app.get("/api/stream/{session_id}")
-async def stream_discussion(session_id: str):
-    """
-    SSE endpoint — streams agent messages as they arrive.
-    Each event is a JSON-encoded AgentMessage.
-    """
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
+async def stream(session_id: str):  # type: ignore[no-untyped-def]
+    if session_id not in _jobs:
+        saved = await store.get_session(session_id)
+        if not saved:
+            raise HTTPException(404, "unknown session")
+        return JSONResponse(saved)
 
-    queue = sessions[session_id]
+    async def gen():  # type: ignore[no-untyped-def]
+        import json
 
-    async def event_generator() -> AsyncIterator[str]:
-        try:
-            while True:
-                msg = await asyncio.wait_for(queue.get(), timeout=120.0)
-                if msg is None:
-                    # Discussion complete
-                    yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
-                    break
+        seen = 0
+        while True:
+            job = _jobs[session_id]
+            while seen < len(job["events"]):
+                ev = job["events"][seen]
+                seen += 1
+                yield {"event": ev["event"], "data": json.dumps(ev["data"], default=str)}
+            if job["status"] in ("done", "failed"):
+                break
+            await asyncio.sleep(0.2)
 
-                payload = {
-                    "session_id": session_id,
-                    "agent": msg.agent,
-                    "agent_name": msg.agent_name,
-                    "content": msg.content,
-                    "round": msg.round,
-                    "timestamp": msg.timestamp,
-                }
-                yield f"event: agent_message\ndata: {json.dumps(payload)}\n\n"
+    return EventSourceResponse(gen())
 
-        except asyncio.TimeoutError:
-            yield f"event: error\ndata: {json.dumps({'error': 'Timeout waiting for agent response'})}\n\n"
-        finally:
-            sessions.pop(session_id, None)
 
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        },
-    )
+@app.get("/api/sessions/{session_id}")
+async def get_session(session_id: str):  # type: ignore[no-untyped-def]
+    if session_id in _jobs:
+        return _jobs[session_id]
+    saved = await store.get_session(session_id)
+    if not saved:
+        raise HTTPException(404, "unknown session")
+    return saved
+
+
+@app.get("/api/report/{session_id}", response_class=HTMLResponse)
+async def get_report(session_id: str):  # type: ignore[no-untyped-def]
+    html = await store.get_report(session_id)
+    if html:
+        return HTMLResponse(html)
+    if session_id in _jobs and _jobs[session_id].get("result"):
+        r = _jobs[session_id]["result"]
+        return HTMLResponse(_report_html(session_id, _jobs[session_id]["pr_url"],
+                                         r.get("claims", []), r.get("comment", "")))
+    raise HTTPException(404, "report not ready")
+
+
+@app.post("/webhook/github")
+async def webhook(payload: dict):  # type: ignore[no-untyped-def]
+    # GitHub App webhook (minimal): pull_request opened/synchronize -> start review
+    try:
+        pr = payload.get("pull_request", {})
+        url = pr.get("html_url", "")
+        if not url:
+            return {"ok": False, "reason": "no pull_request.html_url"}
+        session_id = uuid.uuid4().hex[:8]
+        _jobs[session_id] = {"pr_url": url, "diff": None, "post": True,
+                             "events": [], "status": "pending", "result": None}
+        asyncio.create_task(_run_job(session_id))
+        return {"ok": True, "session_id": session_id}
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+def _report_html(session_id: str, pr_url: str, claims: list, comment: str) -> str:
+    rows = "".join(
+        f"<tr><td>{c.get('file','')}:{c.get('line','')}</td><td>{c.get('severity','')}</td>"
+        f"<td>{c.get('issue','')}</td><td>{c.get('verification_status','')}</td></tr>"
+        for c in claims)
+    return (f"<html><head><title>PolyMind report {session_id}</title></head><body>"
+            f"<h1>PolyMind Review — {session_id}</h1><p>PR: {pr_url}</p>"
+            f"<pre>{comment}</pre><table border=1><tr><th>Loc</th><th>Sev</th>"
+            f"<th>Issue</th><th>Status</th></tr>{rows}</table></body></html>")
+
+
+# serve frontend static (index.html etc.) at /
+try:
+    app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
+except Exception:
+    pass

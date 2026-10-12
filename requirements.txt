@@ -1,6 +1,15 @@
-google-antigravity
 fastapi
 uvicorn[standard]
 python-dotenv
 pydantic
+pydantic-settings
+structlog
+tenacity
+httpx
+PyGithub
+Jinja2
 sse-starlette
+anyio
+pytest
+pytest-asyncio
+httpx

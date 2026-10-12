@@ -1,3 +1,1 @@
-"""
-PolyMind backend package.
-"""
+"""PolyMind v2 backend package."""
